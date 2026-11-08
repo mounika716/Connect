@@ -1,6 +1,6 @@
 {
-  "name": "Whisper Chat",
-  "short_name": "Whisper",
+  "name": "Connect",
+  "short_name": "Connect",
   "description": "Private. Warm. Yours.",
   "start_url": "/",
   "display": "standalone",

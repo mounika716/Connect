@@ -902,7 +902,7 @@ export default function App() {
     return (
       <div className="auth-wrap">
         <div className="auth-card">
-          <h1 className="logo">🔗 Connect</h1>
+          <h1 className="logo">🌸Connect</h1>
           <p className="subtitle">Private. Warm. Yours.</p>
           <h2>{isLogin ? 'Welcome back' : 'Create account'}</h2>
           {authErr && <div className="err">{authErr}</div>}
@@ -1252,7 +1252,7 @@ export default function App() {
             </>
           ) : (
             <div className="empty-chat">
-              <h1>🔗 Connect</h1>
+              <h1>🌸Connect</h1>
               <p>Select a chat or start a new one</p>
             </div>
           )}
