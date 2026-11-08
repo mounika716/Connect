@@ -57,7 +57,15 @@ const fmtSecs = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(
 const isTemp = (id) => !id || String(id).startsWith('tmp');
 
 export default function App() {
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('chatUser') || 'null'));
+  const [user, setUser] = useState(() => {
+    const saved = JSON.parse(localStorage.getItem('chatUser') || 'null');
+    if (saved && !saved.token) {
+      localStorage.removeItem('chatUser');
+      return null;
+    }
+    return saved;
+  });
+
   const [isLogin, setIsLogin] = useState(true);
   const [uInput, setUInput] = useState('');
   const [pInput, setPInput] = useState('');
@@ -74,12 +82,9 @@ export default function App() {
   const [chat, setChat] = useState([]);
   const [typing, setTyping] = useState(false);
 
-  // LAYOUT
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [resizing, setResizing] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem('sidebarCollapsed') === 'true'
-  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('sidebarCollapsed') === 'true');
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -151,20 +156,14 @@ export default function App() {
   const composerEmojiRef = useRef(null);
 
   useEffect(() => { callRef.current = call; }, [call]);
+  useEffect(() => { localStorage.setItem('sidebarCollapsed', sidebarCollapsed); }, [sidebarCollapsed]);
 
-  // Persist sidebar state
-  useEffect(() => {
-    localStorage.setItem('sidebarCollapsed', sidebarCollapsed);
-  }, [sidebarCollapsed]);
-
-  // Mobile detection
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768);
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, []);
 
-  // Ctrl/Cmd+B to toggle sidebar
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
@@ -252,6 +251,14 @@ export default function App() {
     setTimeout(() => setToast(''), 3000);
   };
 
+  useEffect(() => {
+    if (user?.token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${user.token}`;
+    } else {
+      delete axios.defaults.headers.common['Authorization'];
+    }
+  }, [user]);
+
   const fetchConvos = async () => {
     if (!user) return;
     try {
@@ -277,29 +284,29 @@ export default function App() {
 
   const markRead = async () => {
     if (!user || !targetId) return;
-    try { await axios.post(`${API}/api/messages/read`, { readerId: user.uniqueId, senderId: targetId }); } catch {}
+    try { await axios.post(`${API}/api/messages/read`, { senderId: targetId }); } catch {}
   };
 
   useEffect(() => {
-    socket.connect();
-    if (user) {
-      socket.emit('register_user', user.uniqueId);
+    if (user && user.token) {
+      socket.auth = { token: user.token };
+      socket.connect();
       fetchConvos();
       fetchStatuses();
       fetchBlocked();
+    } else {
+      socket.disconnect();
     }
     return () => socket.disconnect();
   }, [user]);
 
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [chat, typing]);
+  useEffect(() => { if (targetId && user && chat.length > 0) markRead(); }, [targetId, user, chat.length]);
 
   useEffect(() => {
-    if (targetId && user && chat.length > 0) markRead();
-  }, [targetId, user, chat.length]);
-
-  useEffect(() => {
+    if (!user) return;
     const onMsg = (data) => {
-      const isMe = data.senderId === user?.uniqueId;
+      const isMe = data.senderId === user.uniqueId;
       if (!isMe && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
         const preview = data.messageType === 'image' ? '📷 Photo'
                       : data.messageType === 'audio' ? '🎤 Voice message'
@@ -324,9 +331,7 @@ export default function App() {
       fetchConvos();
     };
     const onEdit = (data) => {
-      setChat((prev) => prev.map(m =>
-        String(m._id) === String(data._id) ? { ...m, message: data.message, edited: true } : m
-      ));
+      setChat((prev) => prev.map(m => String(m._id) === String(data._id) ? { ...m, message: data.message, edited: true } : m));
       fetchConvos();
     };
     const onDel = (data) => {
@@ -352,9 +357,7 @@ export default function App() {
       if (by === targetId) setChat(prev => prev.map(m => m.type === 'sent' ? { ...m, read: true } : m));
     };
     const onReacted = (data) => {
-      setChat(prev => prev.map(m =>
-        String(m._id) === String(data._id) ? { ...m, reactions: data.reactions } : m
-      ));
+      setChat(prev => prev.map(m => String(m._id) === String(data._id) ? { ...m, reactions: data.reactions } : m));
     };
     const onSendError = ({ error }) => {
       showToast('⚠️ ' + error);
@@ -390,13 +393,12 @@ export default function App() {
     if (!user) return;
     const onIncoming = (data) => {
       if (callRef.current) {
-        socket.emit('call_response', { to: data.from, from: user.uniqueId, accepted: false });
+        socket.emit('call_response', { to: data.from, accepted: false });
         return;
       }
-      if (data.from === user.uniqueId) return;
       setCallError('');
       setCall({
-        peerId: data.from, peerName: data.fromName, peerPic: data.fromPic,
+        peerId: data.from, peerName: data.fromName, peerPic: '',
         type: data.type, incoming: true, outgoing: false, status: 'ringing', offer: data.offer
       });
     };
@@ -480,7 +482,6 @@ export default function App() {
       const { data } = await axios.post(`${API}/api/${ep}`, { username: uInput, password: pInput });
       setUser(data);
       localStorage.setItem('chatUser', JSON.stringify(data));
-      socket.emit('register_user', data.uniqueId);
       setUInput(''); setPInput('');
     } catch (e) { setAuthErr(e.response?.data?.error || 'Error'); }
   };
@@ -529,8 +530,8 @@ export default function App() {
     };
     setChat((p) => [...p, tmp]);
     socket.emit('send_message', {
-      senderId: user.uniqueId, targetUniqueId: targetId,
-      senderUsername: user.username, message: content, messageType: type,
+      targetUniqueId: targetId,
+      message: content, messageType: type,
       replyTo: tmp.replyTo
     });
     if (type === 'text') { setMessage(''); socket.emit('stop_typing', { targetUniqueId: targetId }); }
@@ -561,9 +562,7 @@ export default function App() {
 
   const toggleReaction = async (msgId, emoji) => {
     try {
-      const { data } = await axios.post(`${API}/api/messages/${msgId}/react`, {
-        userId: user.uniqueId, emoji
-      });
+      const { data } = await axios.post(`${API}/api/messages/${msgId}/react`, { emoji });
       setChat(prev => prev.map(m =>
         String(m._id) === String(msgId) ? { ...m, reactions: data.reactions } : m
       ));
@@ -575,7 +574,7 @@ export default function App() {
     if (!targetId) return;
     if (!window.confirm(`Block ${targetName}? They won't be able to message you.`)) return;
     try {
-      await axios.post(`${API}/api/users/${targetId}/block`, { blockerId: user.uniqueId });
+      await axios.post(`${API}/api/users/${targetId}/block`);
       showToast(`Blocked ${targetName}`);
       setShowMenu(false);
       fetchBlocked();
@@ -584,7 +583,7 @@ export default function App() {
 
   const unblockUser = async (uid) => {
     try {
-      await axios.post(`${API}/api/users/${uid}/unblock`, { blockerId: user.uniqueId });
+      await axios.post(`${API}/api/users/${uid}/unblock`);
       fetchBlocked();
     } catch {}
   };
@@ -640,8 +639,8 @@ export default function App() {
   const saveSettings = async () => {
     try {
       const { data } = await axios.put(`${API}/api/users/${user.uniqueId}`, { username: editName, profilePic: editPic });
-      setUser(data);
-      localStorage.setItem('chatUser', JSON.stringify(data));
+      setUser(prev => ({ ...prev, ...data }));
+      localStorage.setItem('chatUser', JSON.stringify({ ...user, ...data }));
       setShowSettings(false);
       fetchConvos();
     } catch (e) { alert(e.response?.data?.error || 'Error saving'); }
@@ -670,7 +669,7 @@ export default function App() {
     const content = statusPic || statusText;
     if (!content) return;
     try {
-      await axios.post(`${API}/api/status`, { uniqueId: user.uniqueId, type: statusPic ? 'image' : 'text', content });
+      await axios.post(`${API}/api/status`, { type: statusPic ? 'image' : 'text', content });
       setStatusText(''); setStatusPic(''); setShowStatusModal(false);
       fetchStatuses();
     } catch { alert('Status post failed'); }
@@ -726,7 +725,7 @@ export default function App() {
     if (isTemp(id)) return alert('Cannot edit unsaved message');
     setEditSaving(true);
     try {
-      await axios.put(`${API}/api/messages/${id}`, { message: editText.trim(), senderId: user.uniqueId });
+      await axios.put(`${API}/api/messages/${id}`, { message: editText.trim() });
       setChat((prev) => prev.map(m => String(m._id) === String(id) ? { ...m, message: editText.trim(), edited: true } : m));
       setEditTarget(null); setEditText('');
     } catch (err) { alert('Edit failed: ' + (err.response?.data?.error || err.message)); }
@@ -744,7 +743,7 @@ export default function App() {
     if (!singleDelete) return;
     const { id } = singleDelete;
     try {
-      if (scope === 'me') await axios.delete(`${API}/api/messages/${id}/me?userId=${user.uniqueId}`);
+      if (scope === 'me') await axios.delete(`${API}/api/messages/${id}/me`);
       else await axios.delete(`${API}/api/messages/${id}/all`);
       setChat((prev) => prev.filter(m => String(m._id) !== String(id)));
       setSingleDelete(null);
@@ -822,10 +821,7 @@ export default function App() {
         peerId: targetId, peerName: targetName, peerPic: targetPic,
         type, incoming: false, outgoing: true, status: 'calling', offer: null
       });
-      socket.emit('call_user', {
-        to: targetId, from: user.uniqueId, fromName: user.username,
-        fromPic: user.profilePic || '', type, offer
-      });
+      socket.emit('call_user', { to: targetId, type, offer });
       callTimeoutRef.current = setTimeout(() => {
         socket.emit('call_end', { to: targetId });
         cleanupCall(); setCall(null);
@@ -858,7 +854,7 @@ export default function App() {
       pendingCandidatesRef.current = [];
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      socket.emit('call_response', { to: peerId, from: user.uniqueId, accepted: true, answer });
+      socket.emit('call_response', { to: peerId, accepted: true, answer });
       setCall(prev => prev ? { ...prev, incoming: false, status: 'connected' } : prev);
     } catch (err) {
       alert('Could not access camera/mic: ' + err.message);
@@ -868,7 +864,7 @@ export default function App() {
 
   const rejectCall = () => {
     const c = callRef.current;
-    if (c?.peerId) socket.emit('call_response', { to: c.peerId, from: user.uniqueId, accepted: false });
+    if (c?.peerId) socket.emit('call_response', { to: c.peerId, accepted: false });
     cleanupCall(); setCall(null);
   };
 
@@ -906,7 +902,7 @@ export default function App() {
     return (
       <div className="auth-wrap">
         <div className="auth-card">
-          <h1 className="logo">🌸 Whisper</h1>
+          <h1 className="logo">🔗 Connect</h1>
           <p className="subtitle">Private. Warm. Yours.</p>
           <h2>{isLogin ? 'Welcome back' : 'Create account'}</h2>
           {authErr && <div className="err">{authErr}</div>}
@@ -946,7 +942,7 @@ export default function App() {
     <div className="app">
       {showInstallBanner && installPrompt && (
         <div className="install-banner">
-          <span>📱 Install Whisper as an app?</span>
+          <span>📱 Install Connect as an app?</span>
           <button className="install-yes" onClick={triggerInstall}>Install</button>
           <button className="install-no" onClick={() => setShowInstallBanner(false)}>✕</button>
         </div>
@@ -1256,7 +1252,7 @@ export default function App() {
             </>
           ) : (
             <div className="empty-chat">
-              <h1>🌸 Whisper</h1>
+              <h1>🔗 Connect</h1>
               <p>Select a chat or start a new one</p>
             </div>
           )}
